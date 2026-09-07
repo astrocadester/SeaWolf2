@@ -17,10 +17,10 @@ The original game was designed and programmed by:
 
 |  |  |
 | --- | --- |
-| [ROM identity and build](#rom-organization) | zmac 1.3 produces the 8 KB image that matches the original RC32/SHA1 value
+| [ROM identity and build](#rom-organization) | zmac 1.3 produces the 8 KB image that matches the original CRC32/SHA1 values. |
 | [Graphics and text](#structured-graphics-and-tables) | 43 font glyphs, localized prompts, status graphics, 26 referenced object descriptors, 2 unreferenced descriptors, self-test patterns, and both trajectory tables are bounded and labeled. |
 | [Sound](#discrete-sound-control) | Sound timers, port `$40/$41` packing, sonar, hit, torpedo, dive, and coin-counter timing are documented. |
-| [TERSE](#terse-execution-architecture) | 11 kernel primitives, 21 native application words, six threaded programs, inline operands, calling conventions, register preservation, interrupt interaction, and maximum stack depths are documented. |
+| [TERSE](#terse-execution-architecture) | 11 resident kernel words, 21 native application words, six threaded programs, inline operands, calling conventions, register preservation, interrupt interaction, and maximum stack depths are documented. |
 | [Native code and diagnostics](#service-diagnostics) | All reachable Z80 routines are expressed as assembly rather than `DB`. The four service entry modes, checksum and walking-bit algorithms, failure displays, handle screen, and convergence grid are documented. |
 | [RAM and I/O](#ram-and-io-ownership) | Every live byte from `$C000-$C221`, work-RAM clear domains, stack reserve, aliases, raster records, object padding, reset-only cells, and ROM-used I/O ports are assigned or formally classified. |
 | [Video and raster](#raster-interrupt-scheduler) | Both 6-entry schedules, IM 2 selection, interrupt handlers, moving split lines, Function Generator modes, Magic RAM usage, drawing, erasure, and collision reads are traced. |
@@ -167,7 +167,7 @@ little-endian native Z80 address. `TERSE_DISPATCH` reads that address through
 or application word. This is the game's foreground control architecture, not a
 small isolated script engine.
 
-The ROM contains 11 thread-dispatchable kernel primitives, 21 native
+The ROM contains 11 thread-dispatchable kernel words, 21 native
 application words, and six complete threaded programs: the initial thread, the
 nested initialization thread, the control thread, and three localized GAME
 OVER threads. Every execution cell and 16-bit inline operand is expressed as a
@@ -179,7 +179,7 @@ flowchart TD
     cell["BC points to the next execution cell"] --> dispatch["TERSE_DISPATCH"]
     dispatch --> word["Kernel or native word"]
     word -->|JP through IY| dispatch
-    word -->|RST 08h| enter["TERSE_ENTER"]
+    word -->|RST 08h| enter["TERSE_COLON_ENTRY"]
     enter --> nested["Nested inline thread"]
     nested -->|TERSE_RETURN| dispatch
 ```
@@ -192,12 +192,12 @@ flowchart TD
 | `SP=$C3E2` | Downward-growing 16-bit TERSE data stack; also the balanced native Z80 call/push stack |
 | `IX=$C400` | Downward-growing control stack for nested-thread return IPs and `BEGIN` loop addresses |
 | `IY=$0043` | Native-word continuation, normally `TERSE_DISPATCH` |
-| `RST $08` | Enter a nested inline thread through `TERSE_ENTER` |
+| `RST $08` | Enter a nested inline thread through `TERSE_COLON_ENTRY` |
 
-`TERSE_ENTER` receives control through `RST $08`. The RST instruction pushes
-the address of the inline thread on SP; `TERSE_ENTER` immediately pops that
-address into `BC`, so the TERSE data-stack depth is unchanged. The caller's
-previous `BC` is saved as a two-byte IX control cell. `TERSE_RETURN` restores
+`TERSE_COLON_ENTRY` receives control through `RST $08`. The RST instruction
+pushes the address of the inline thread on SP; `TERSE_COLON_ENTRY` immediately
+pops that address into `BC`, so the TERSE data-stack depth is unchanged. The
+caller's previous `BC` is saved as a two-byte IX control cell. `TERSE_RETURN` restores
 that saved IP and removes the IX cell.
 
 Native application words enter after the dispatcher has advanced `BC` past
@@ -231,7 +231,7 @@ continuation, not a TERSE return.
 
 | Address | Source label | Function |
 | ---: | --- | --- |
-| `$0008` | `TERSE_ENTER` | Save caller BC on IX and enter the inline thread following `RST $08` |
+| `$0008` | `TERSE_COLON_ENTRY` | Save caller BC on IX and enter the inline thread following `RST $08` |
 | `$0043` | `TERSE_DISPATCH` | Fetch a little-endian execution address through BC and jump to it |
 
 ### Kernel words and inline formats
@@ -246,12 +246,27 @@ Every 16-bit inline value is little-endian.
 | `$0052` | `TERSE_BFETCH` | `( address -- byte )` | None | Read and zero-extend one byte through a stacked address |
 | `$0059` | `TERSE_BSTORE` | `( value address -- )` | None | Store the low byte of `value` at `address` |
 | `$005E` | `TERSE_BEGIN` | `( control: -- begin )` | None | Save the address of the current `BEGIN` execution cell |
-| `$006E` | `TERSE_UNTIL` | `( flag -- ) ( control: begin -- )` | None | Repeat at `BEGIN` while `flag` is zero |
-| `$0081` | `TERSE_TRUE` | `( -- $FFFF )` | None | Push Boolean true |
+| `$006E` | `TERSE_END` | `( flag -- ) ( control: begin -- )` | None | End the loop when true; repeat at `BEGIN` when false |
+| `$0081` | `TERSE_CONST_FFFF` | `( -- $FFFF )` | None | Push the constant used by the sole caller to store an active `$FF` state byte |
 | `$0087` | `TERSE_LIT` | `( -- value )` | `value16` | Push a 16-bit literal |
 | `$0090` | `TERSE_BYTE_NOT` | `( value -- value' )` | None | Complement only the low byte; preserve the high byte |
 | `$0097` | `TERSE_ZERO_BRANCH` | `( flag -- )` | `target16` | Branch to `target` when zero; otherwise skip it |
 | `$00A8` | `TERSE_BRANCH` | `( -- )` | `target16` | Unconditional branch |
+
+`TERSE_END` follows the standard TERSE definition of `END`: terminate a
+`BEGIN ... END` loop when the consumed flag is true and repeat when it is
+false. The earlier label `UNTIL` described similar Forth behavior but was not
+the canonical TERSE name.
+
+`TERSE_CONST_FFFF` is named for proven behavior rather than an assumed source
+word. Its only caller passes `$FFFF` to `B!`, which stores `$FF` in
+`PATROL_COMPLETE_FLAG`. The later TERSE standard requires words returning flags
+to return `0` or `1`, so the ROM does not support naming this constant `TRUE`.
+Likewise, `TERSE_COLON_ENTRY` avoids confusion with the standard glossary word
+`ENTER`, which creates a dictionary entry and is unrelated to the `RST $08`
+runtime. `TERSE_RETURN` is likewise a descriptive runtime label: it restores a
+nested threaded instruction pointer, but does not claim that `RETURN` was the
+original TERSE source spelling.
 
 `TERSE_BFETCH` is a complete resident word but no Sea Wolf II thread references
 it. All five byte reads in the control thread use `TERSE_INLINE_BFETCH`.
@@ -328,7 +343,7 @@ sound-orientation state.
 
 ### Control thread `$0545-$0592`
 
-`CONTROL_THREAD_WORD` enters at `$0545`. `TERSE_BEGIN` and `TERSE_UNTIL`
+`CONTROL_THREAD_WORD` enters at `$0545`. `TERSE_BEGIN` and `TERSE_END`
 define one balanced loop. Every branch converges at `control_continue` before
 the exit flag is tested.
 
@@ -352,8 +367,8 @@ flowchart TD
 | Active play | If `ACTIVE_PLAYER_COUNT` is nonzero, erase expired overlays, process hits, refresh scores, and advance sonar |
 | Active patrol | If the low-byte complement of `PATROL_COMPLETE_FLAG` is nonzero, update the clock/reloads, activate targets, and poll fire |
 | No player | Initialize attract-mode object pools, blink the new-high-score message, and test `CREDIT_COUNT` |
-| Credit arrival | Push true and the address of `PATROL_COMPLETE_FLAG`, then store `$FF` through `TERSE_BSTORE` |
-| Common tail | Pulse the coin counter, fetch `CONTROL_LOOP_EXIT_FLAG`, and repeat through `TERSE_UNTIL` while it is zero |
+| Credit arrival | Push `$FFFF` and the address of `PATROL_COMPLETE_FLAG`, then store its low byte through `TERSE_BSTORE` |
+| Common tail | Pulse the coin counter, fetch `CONTROL_LOOP_EXIT_FLAG`, and repeat through `TERSE_END` while it is zero |
 | Exit | `TERSE_RETURN` restores the caller's threaded IP |
 
 The exact control-transfer cells are:
@@ -368,8 +383,8 @@ The exact control-transfer cells are:
 | `$0561-$056A` | Fetch patrol-complete flag, low-byte NOT, zero-branch to `$0589` |
 | `$056B-$0574` | Clock/reload, target, fire words; branch to `$0589` |
 | `$0575-$0580` | Attract-pool/high-score words; fetch credits; zero-branch to `$0589` |
-| `$0581-$0588` | `TRUE`, `LIT PATROL_COMPLETE_FLAG`, `BSTORE` |
-| `$0589-$0592` | Coin pulse, exit-flag fetch, `UNTIL`, `RETURN` |
+| `$0581-$0588` | `CONST_FFFF`, `LIT PATROL_COMPLETE_FLAG`, `BSTORE` |
+| `$0589-$0592` | Coin pulse, exit-flag fetch, `END`, `RETURN` |
 
 ### Localized GAME OVER threads
 
@@ -392,7 +407,7 @@ The maximum TERSE data-stack depth is **two 16-bit cells**. The no-player
 credit path reaches it with:
 
 ```text
-TERSE_TRUE  -> one cell
+TERSE_CONST_FFFF -> one cell
 TERSE_LIT   -> two cells, SP=$C3DE
 TERSE_BSTORE -> zero cells
 ```
@@ -405,11 +420,11 @@ the initialization thread's nested control loop:
 
 | Operation | IX after allocation | Live control cells |
 | --- | ---: | ---: |
-| `INITIALIZE_MAIN_STATE` → `TERSE_ENTER` | `$C3FE` | Outer initial-thread return |
-| `CONTROL_THREAD_WORD` → `TERSE_ENTER` | `$C3FC` | Initialization-thread return |
+| `INITIALIZE_MAIN_STATE` → `TERSE_COLON_ENTRY` | `$C3FE` | Outer initial-thread return |
+| `CONTROL_THREAD_WORD` → `TERSE_COLON_ENTRY` | `$C3FC` | Initialization-thread return |
 | `TERSE_BEGIN` | `$C3FA` | Control-loop begin address |
 
-`TERSE_UNTIL` removes the loop cell on every iteration before either repeating
+`TERSE_END` removes the loop cell on every iteration before either repeating
 or exiting. The control thread's `TERSE_RETURN` then removes its nested return,
 and the initialization thread's `TERSE_RETURN` removes the outer return. A
 top-level control loop reaches two IX cells; a localized GAME OVER thread
@@ -1501,7 +1516,7 @@ filler sites:
 
 | ROM block | Filler | Sum without filler | Required value | Structural boundary |
 | ---: | ---: | ---: | ---: | --- |
-| `$0000-$07FF` | `$0015 = E3` | `$1C` | `$E3` | Between `TERSE_ENTER`'s terminal `JP (IY)` and `WARM_START` at `$0016` |
+| `$0000-$07FF` | `$0015 = E3` | `$1C` | `$E3` | Between `TERSE_COLON_ENTRY`'s terminal `JP (IY)` and `WARM_START` at `$0016` |
 | `$0800-$0FFF` | `$0ACA = 37` | `$C8` | `$37` | Between `DECODE_HANDLE_POSITION`'s `RET` and `UPDATE_SONAR_SEQUENCE` at `$0ACB` |
 | `$1000-$17FF` | `$1385 = 8E` | `$71` | `$8E` | After the zero terminator of `TEXT_SUB`; every interrupt pointer targets `$1386` |
 | `$1800-$1FFF` | `$1FFF = 1C` | `$E3` | `$1C` | Final byte after erased-ROM fill at `$1FB4-$1FFE` |

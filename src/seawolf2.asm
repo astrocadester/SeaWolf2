@@ -10,6 +10,9 @@
 ; TERSE cells are little-endian execution addresses.  Kernel and native
 ; application words tail-dispatch through JP (IY); composite words use RST $08
 ; to enter an inline nested thread and TERSE_RETURN to restore the prior BC.
+; Standard TERSE names are used only where the documented semantics match.
+; Behavioral labels identify custom words and runtimes whose original source
+; spelling is not established by the ROM image.
 ; Thread analysis proves a maximum two-cell TERSE data depth (SP=$C3DE) and a
 ; maximum three-cell IX control depth (IX=$C3FA).  Native CALL/PUSH traffic and
 ; interrupt register saves also use SP but are balanced independently.
@@ -55,7 +58,7 @@
 ;   $1EFC-$1FB3  French prompt text
 ;
 ; PADDING OR CHECKSUM FILLER                     4 spans / 79 bytes
-;   $0015        isolated byte between TERSE_ENTER and WARM_START
+;   $0015        isolated byte between TERSE_COLON_ENTRY and WARM_START
 ;   $0ACA        isolated byte between DECODE_HANDLE_POSITION and sonar update
 ;   $1385        isolated byte between TEXT_SUB and the $1386 ISR entry
 ;   $1FB4-$1FFF  erased-ROM fill; $1FFF is the block checksum adjustment
@@ -597,17 +600,18 @@ COLD_START:             NOP
 ;   preserve BC/IX/IY and restore SP unless their documented word semantics
 ;   deliberately change one of the two TERSE stacks.
 ;
-; ENTER is reached through RST $08.  It moves the caller's threaded instruction
-; pointer from BC to the downward-growing IX control stack, then makes the Z80
-; return address following the RST instruction the nested threaded IP.
-TERSE_ENTER:            DEC     IX
+; The colon-entry runtime is reached through RST $08.  It moves the caller's
+; threaded instruction pointer from BC to the downward-growing IX control stack,
+; then makes the Z80 return address following RST $08 the nested threaded IP.
+TERSE_COLON_ENTRY:      DEC     IX
                         DEC     IX
                         LD      (IX+$01),B
                         LD      (IX+$00),C
                         POP     BC
                         DW      TERSE_DISPATCH_OPCODE
 
-; No control-flow edge enters this byte: TERSE_ENTER ends in JP (IY), and the
+; No control-flow edge enters this byte: TERSE_COLON_ENTRY ends in JP (IY), and
+; the
 ; next native entry is WARM_START at $0016.  $E3 is the exact complement needed
 ; for the first $0800-byte ROM's additive checksum to equal $FF.
 ROM_BLOCK_0_CHECKSUM_FILLER:
@@ -667,7 +671,7 @@ TERSE_BSTORE:           POP     HL
                         DW      TERSE_DISPATCH_OPCODE
 
 ; ( -- ) ( control: -- begin ) -- save the address of this BEGIN execution
-; cell on IX.  TERSE_UNTIL consumes the saved address every iteration.
+; cell on IX.  TERSE_END consumes the saved address every iteration.
 TERSE_BEGIN:            DEC     IX
                         DEC     IX
                         LD      HL,$FFFE
@@ -676,21 +680,24 @@ TERSE_BEGIN:            DEC     IX
                         LD      (IX+$01),H
                         DW      TERSE_DISPATCH_OPCODE
 
-; ( flag -- ) ( control: begin -- ) -- repeat at BEGIN while flag is zero.
-TERSE_UNTIL:            LD      D,(IX+$01)
+; END ( flag -- ) ( control: begin -- ) -- terminate on true; repeat at BEGIN
+; on false.  This is the runtime behavior of canonical TERSE BEGIN ... END.
+TERSE_END:              LD      D,(IX+$01)
                         LD      E,(IX+$00)
                         INC     IX
                         INC     IX
                         POP     HL
                         LD      A,H
                         OR      L
-                        JR      NZ,TERSE_UNTIL_DONE
+                        JR      NZ,TERSE_END_DONE
                         LD      B,D
                         LD      C,E
-TERSE_UNTIL_DONE:       DW      TERSE_DISPATCH_OPCODE
+TERSE_END_DONE:         DW      TERSE_DISPATCH_OPCODE
 
-; ( -- $FFFF ) -- Boolean true.
-TERSE_TRUE:             LD      HL,$FFFF
+; ( -- $FFFF ) -- push the constant used to store an active $FF state byte.
+; The sole threaded caller passes it to B!; no ROM path uses it as a returned
+; Boolean flag.  The later TERSE standard specifies 0/1 for returned flags.
+TERSE_CONST_FFFF:       LD      HL,$FFFF
                         PUSH    HL
                         DW      TERSE_DISPATCH_OPCODE
 
@@ -1601,12 +1608,12 @@ control_no_state:       DW      TERSE_INLINE_BFETCH,ACTIVE_PLAYER_COUNT
 control_no_player:      DW      INITIALIZE_OBJECT_POOLS,UPDATE_NEW_HIGH_SCORE_MESSAGE
                         DW      TERSE_INLINE_BFETCH,CREDIT_COUNT
                         DW      TERSE_ZERO_BRANCH,control_continue
-                        DW      TERSE_TRUE
+                        DW      TERSE_CONST_FFFF
                         DW      TERSE_LIT,PATROL_COMPLETE_FLAG
                         DW      TERSE_BSTORE
 control_continue:       DW      PULSE_COIN_COUNTER
                         DW      TERSE_INLINE_BFETCH,CONTROL_LOOP_EXIT_FLAG
-                        DW      TERSE_UNTIL
+                        DW      TERSE_END
                         DW      TERSE_RETURN
 
 ;-------------------------------------------------------------------------------
