@@ -2,6 +2,8 @@
 
 This project is a byte-exact reconstruction and reverse-engineering baseline for **Sea Wolf II**, released by Dave Nutting Associates (DNA) / Midway in 1978.
 
+![Sea Wolf II marquee](images/seawolf2-marquee.jpeg)
+
 Sea Wolf II is a notable DNA title because it was the **first commercial arcade game** to use the DNA Astrocade hardware platform. 
 
 And the **first game to be implemented in TERSE**, DNA's direct-threaded Z80 language. 
@@ -33,6 +35,7 @@ The original game was designed and programmed by:
 | Path | Contents |
 | --- | --- |
 | `src/seawolf2.asm` | Reconstructed and annotated source |
+| `src/astrocade_game_seawolf2.inc` | Hardware, memory, structure, and gameplay definitions used by the source |
 | `build.sh` | Linux build and packaging script |
 | `build.bat` | Windows build and packaging script |
 | `tools/zmac` | Bundled Linux zmac 1.3 executable |
